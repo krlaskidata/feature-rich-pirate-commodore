@@ -36,6 +36,8 @@ Thank you for your interest in The Cursed Commodore project!
 
 ❌ **Copy the Code**
 - Don't use this code (or significant portions) in your bot
+- Don't copy any files from this repository
+- Don't use binaries, DLL files, or build artifacts
 - Don't fork and claim as your own work
 - Don't redistribute modified versions
 
