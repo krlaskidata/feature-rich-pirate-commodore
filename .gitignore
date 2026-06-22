@@ -1,0 +1,61 @@
+# Build Results
+bin/
+obj/
+.vs/
+.vscode/
+*.dll
+*.exe
+*.pdb
+*.cache
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.env
+piratbot_token.txt
+tokens/
+secrets/
+config/private/
+
+# User-specific settings
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Dependencies
+packages/
+.nuget/
+node_modules/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Runtime data
+bump_reminders.json
+birthdays.json
+xp_data.json
+economy_data.json
+tickets_config*.json
+security_*.json
+
+# OS
+.DS_Store
+desktop.ini
+
+# Backup files
+*.bak
+*.backup
+~*
+
+# Temp files
+*.tmp
+*.temp

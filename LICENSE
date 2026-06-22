@@ -1,0 +1,57 @@
+# PROPRIETARY AND CONFIDENTIAL LICENSE
+
+## The Cursed Commodore – Bot Architecture Reference
+
+© 2026 – All Rights Reserved
+
+---
+
+## GRANT OF LICENSE
+
+This repository is provided for **educational and reference purposes only**. You may:
+
+✅ **VIEW** the code structure and implementation patterns
+✅ **STUDY** the architecture and security practices  
+✅ **LEARN** from the code organization and Discord.NET usage
+✅ **DISCUSS** implementation details in community forums
+✅ **USE THE BOT** – Add The Cursed Commodore to your Discord server using the official bot link
+
+### Using The Cursed Commodore Bot
+
+You are **fully permitted** to use the official bot deployment:
+
+🔗 **[Add The Cursed Commodore to Your Server](https://discord.com/oauth2/authorize?client_id=1448582334315237387&permissions=8&integration_type=0&scope=bot)**
+
+Simply click the link above and select your server. The bot is fully functional and ready to use!
+
+---
+
+## RESTRICTIONS
+
+You may **NOT**:
+
+❌ **COPY** or reproduce any significant portions of code
+❌ **USE** this code, in whole or in part, in your own projects
+❌ **MODIFY** and redistribute this code
+❌ **CREATE** derivative works based on this codebase
+❌ **COMMERCIALIZE** any software derived from this code
+❌ **CLAIM OWNERSHIP** of the architectural patterns or implementations
+
+---
+
+## DISCLAIMER
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. 
+THE AUTHOR SHALL NOT BE LIABLE FOR ANY DAMAGES OR LOSSES ARISING 
+FROM THE USE OR INABILITY TO USE THIS SOFTWARE.
+
+---
+
+## ATTRIBUTION
+
+If you reference design patterns or concepts from this repository, 
+proper attribution to **The Cursed Commodore** project is required.
+
+**Questions? Contact the repository maintainers.**
+
+*Fair winds and following seas, matey – but these waters be protected.* ⚓🏴‍☠️
