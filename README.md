@@ -1,12 +1,12 @@
-# ⚓🏴‍☠️ The Cursed Commodore
+# The Cursed Commodore
 
 **Advanced Discord Bot Architecture & Security Reference**
 
-A professional, fully-hardened Discord bot showcasing enterprise-grade security, moderation, economy systems, and pirate-themed gameplay – all built with C# and Discord.NET.
+A professional, fully-hardened Discord bot showcasing enterprise-grade security, moderation, economy systems, and community management – all built with C# and Discord.NET.
 
 ---
 
-## 🎯 Purpose
+## Purpose
 
 This repository serves as an **architectural reference** for building production-ready Discord bots. Study the patterns, learn from the security implementations, and understand how to structure a complex bot application.
 
@@ -14,14 +14,14 @@ This repository serves as an **architectural reference** for building production
 
 ---
 
-## ✨ Features
+## Features
 
 ### Core Systems
-- **🛡️ Security & Moderation** – Hardened permission guards, fail-close error handling
-- **💰 Economy System** – Progressive ranking, gold management, player progression
-- **⚡ XP & Leveling** – Voice time tracking, message XP, automatic role assignment
-- **🎫 Ticket System** – Guild support channel management with atomic persistence
-- **🎂 Birthday Announcements** – Automated celebratory events
+- **Security & Moderation** – Hardened permission guards, fail-close error handling
+- **Economy System** – Progressive ranking, currency management, player progression
+- **XP & Leveling** – Voice time tracking, message XP, automatic role assignment
+- **Ticket System** – Guild support channel management with atomic persistence
+- **Birthday Announcements** – Automated event scheduling
 
 ### Advanced Architecture
 - **DoS Protection** – Rate limiting (6 commands/10s) + global backpressure (120 slots)
@@ -30,14 +30,14 @@ This repository serves as an **architectural reference** for building production
 - **Fail-Fast Validation** – Immediate exception throwing on critical failures
 - **Metadata-Only Logging** – PII redaction in debug output
 
-### Pirate Gameplay
-- ⚓ Pirate-themed commands and responses
-- 🎮 Sea-based games and challenges
-- 💀 Pirate lore and community events
+### Community Features
+- Themed commands and responses
+- Community-based games and challenges
+- Event management and lore integration
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 feature-rich-pirate-commodore/
@@ -46,46 +46,44 @@ feature-rich-pirate-commodore/
 │   ├── Program.cs                      # Entry point with fail-fast exception handling
 │   ├── MessageProtectionService.cs     # DoS mitigation & rate limiting
 │   ├── AtomicFileStore.cs              # Thread-safe JSON persistence
-│   ├── PirateSecurityCommands.cs       # Moderation & security
-│   ├── PirateTicketCommands.cs         # Support ticket system
-│   ├── PirateEconomyCommands.cs        # Currency & ranking
+│   ├── SecurityCommands.cs             # Moderation & security
+│   ├── TicketCommands.cs               # Support ticket system
+│   ├── EconomyCommands.cs              # Currency & ranking
 │   ├── XPSystem.cs                     # Experience & leveling
-│   ├── PirateBirthdayCommands.cs       # Birthday system
+│   ├── BirthdayCommands.cs             # Birthday system
 │   ├── VoiceCommands.cs                # Voice channel management
-│   ├── SecurityService.cs              # Security policy enforcement
 │   └── [Other specialized modules]
 ├── PiratBot.csproj                     # Project configuration
-├── PiratBot.sln                        # Solution file
-└── bin/Debug/                          # Build output
+└── PiratBot.sln                        # Solution file
 ```
 
 ---
 
-## 🔒 Security Highlights
+## Security Architecture
 
 ### 10 Critical Vulnerabilities Addressed
 
-1. **Token Fail-Fast** – Missing credentials throw immediately (no zombie processes)
-2. **Hardcoded Config** – All sensitive values externalized to environment
-3. **PII Redaction** – Logs contain only metadata (no message content)
-4. **Fail-Close Error Handling** – Security exceptions halt pipeline (don't swallow)
+1. **Token Fail-Fast** – Missing credentials throw immediately
+2. **Environment-Based Config** – All sensitive values externalized
+3. **PII Redaction** – Logs contain only metadata
+4. **Fail-Close Error Handling** – Security exceptions halt pipeline
 5. **Rate Limiting** – Per-user (6/10s) + global (120 slots) protection
-6. **Permission Guards** – Sensitive commands protected with role/owner checks
+6. **Permission Guards** – Sensitive commands require verification
 7. **Thread-Safe Persistence** – Atomic writes with per-file locking
-8. **User Validation** – Whitelist-based invite export with explicit confirmation
-9. **DoS Mitigation** – Semaphore-based backpressure + sliding window rate limiter
-10. **Exit Code Handling** – Program returns 1 on startup failure
+8. **User Validation** – Whitelist-based access control
+9. **DoS Mitigation** – Semaphore-based backpressure + rate limiting
+10. **Exit Code Handling** – Program exits with code 1 on failure
 
-### Implementation Patterns
+### Key Implementation Patterns
 
 - **MessageProtectionService** – Centralized DoS protection
 - **AtomicFileStore** – Prevents JSON corruption under concurrent load
 - **SecurityService** – Fail-close architecture for policy enforcement
-- **Nullable Type Safety** – C# 8.0+ null-safety enabled
+- **Type-Safe Nullability** – C# 8.0+ null-safety enabled
 
 ---
 
-## 🚀 Getting Started (For Learning)
+## Getting Started
 
 ### Prerequisites
 - .NET 10.0 SDK
@@ -96,7 +94,7 @@ feature-rich-pirate-commodore/
 1. Clone this repository
 2. Open `PiratBot.sln` in Visual Studio
 3. Explore the module structure
-4. Study the security patterns in `MessageProtectionService.cs` and `AtomicFileStore.cs`
+4. Study security patterns in `MessageProtectionService.cs` and `AtomicFileStore.cs`
 
 ### Running (For Study Only)
 ```bash
@@ -190,7 +188,7 @@ Every line of code serves a purpose. Every design decision is intentional.
 
 ---
 
-## 📞 Support & Questions
+## Support & Questions
 
 For questions about the **architecture or design patterns**:
 - Review the code comments
@@ -200,6 +198,14 @@ For questions about the **architecture or design patterns**:
 For **licensing or usage inquiries**:
 - Review the LICENSE file
 - Contact the repository maintainers
+
+### Discord Support Server
+
+Have questions? Need help? Join our support community:
+
+**[Join Support Discord Server](https://discord.gg/9mPqrZdSH3)**
+
+Connect with other developers, share insights, and get help from the community.
 
 ---
 
