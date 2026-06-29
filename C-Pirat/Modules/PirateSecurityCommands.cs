@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Text;
@@ -25,12 +26,17 @@ namespace PiratBotCSharp.Modules
         public ulong? LogChannelId { get; set; } = null;
         public ulong? WarnChannelId { get; set; } = null;
         public ulong? AdminRoleId { get; set; } = null;
+        public List<ulong> AdminRoleIds { get; set; } = new();
         public ulong? SecurityTicketCategoryId { get; set; } = null;
+        public ulong? Age18RoleId { get; set; } = null;
+        public ulong? VerifyRoleId { get; set; } = null;
+        public ulong? Age18VoiceChannelId { get; set; } = null;
 
         // Behavior toggles (Sapphire-like calm defaults)
         public bool DeleteOnHighSeverity { get; set; } = true;
         public bool WarnUserOnMediumPlus { get; set; } = true;
         public bool TimeoutEnabled { get; set; } = false;
+        public bool AutoBanSuspiciousUsers { get; set; } = false;
 
         // Timeout only after strikes threshold for High/Critical
         public int TimeoutSeconds { get; set; } = 600; // 10 min
@@ -72,7 +78,10 @@ namespace PiratBotCSharp.Modules
         HardLanguage,
         SoftLanguage,
         SerbianLanguage,
-        NsfwAttachment
+        NsfwAttachment,
+        Caps,
+        Gibberish,
+        LinkSpam
     }
 
     internal enum ViolationSeverity
@@ -118,7 +127,7 @@ namespace PiratBotCSharp.Modules
         public ulong ChannelId { get; set; }
         public ulong GuildId { get; set; }
         public ulong UserId { get; set; }
-        public ulong? AdminRoleId { get; set; }
+        public List<ulong> AdminRoleIds { get; set; } = new();
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
         public string Reason { get; set; } = "Security appeal";
         public string Category { get; set; } = "Unknown";
@@ -250,6 +259,14 @@ namespace PiratBotCSharp.Modules
         
         private static DateTime _lastCleanup = DateTime.UtcNow;
 
+        // Image spam tracking: userId → list of timestamps when they sent image messages
+        private static readonly Dictionary<ulong, List<DateTimeOffset>> _imageSendTimes = new();
+        private static readonly object _imageLock = new();
+
+        // Link spam tracking: userId → list of timestamps when they sent link messages
+        private static readonly Dictionary<ulong, List<DateTimeOffset>> _linkSendTimes = new();
+        private static readonly object _linkLock = new();
+
         // -------------------------
         // Regex (compiled, safe)
         // -------------------------
@@ -340,8 +357,13 @@ namespace PiratBotCSharp.Modules
             {
                 if (!File.Exists(SECURITY_FILE)) return new Dictionary<ulong, SecurityConfigEntry>();
                 var txt = File.ReadAllText(SECURITY_FILE);
-                var d = JsonSerializer.Deserialize<Dictionary<ulong, SecurityConfigEntry>>(txt);
-                return d ?? new Dictionary<ulong, SecurityConfigEntry>();
+                var d = JsonSerializer.Deserialize<Dictionary<ulong, SecurityConfigEntry>>(txt) ?? new Dictionary<ulong, SecurityConfigEntry>();
+                foreach (var entry in d.Values)
+                {
+                    if (entry.AdminRoleId.HasValue && !entry.AdminRoleIds.Contains(entry.AdminRoleId.Value))
+                        entry.AdminRoleIds.Add(entry.AdminRoleId.Value);
+                }
+                return d;
             }
             catch
             {
@@ -568,9 +590,9 @@ namespace PiratBotCSharp.Modules
             }
 
             var cfg = GetConfig(guildId);
-            if (cfg.AdminRoleId == null)
+            if (!cfg.AdminRoleIds.Any())
             {
-                await component.RespondAsync("No admin role configured in security setup.", ephemeral: true);
+                await component.RespondAsync("No admin roles configured in security setup.", ephemeral: true);
                 return;
             }
 
@@ -611,11 +633,12 @@ namespace PiratBotCSharp.Modules
                 new Overwrite(user.Id, PermissionTarget.User, new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, readMessageHistory: PermValue.Allow))
             };
 
-            var adminRole = guild.GetRole(cfg.AdminRoleId.Value);
-            if (adminRole != null)
+            foreach (var adminRoleId in cfg.AdminRoleIds)
             {
-                overwrites.Add(new Overwrite(adminRole.Id, PermissionTarget.Role,
-                    new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, readMessageHistory: PermValue.Allow, manageChannel: PermValue.Allow)));
+                var adminRole = guild.GetRole(adminRoleId);
+                if (adminRole != null)
+                    overwrites.Add(new Overwrite(adminRole.Id, PermissionTarget.Role,
+                        new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, readMessageHistory: PermValue.Allow, manageChannel: PermValue.Allow)));
             }
 
             var ticketChannel = await guild.CreateTextChannelAsync($"security-appeal-{user.Username}".ToLowerInvariant(), props =>
@@ -630,7 +653,7 @@ namespace PiratBotCSharp.Modules
                 ChannelId = ticketChannel.Id,
                 GuildId = guildId,
                 UserId = targetUserId,
-                AdminRoleId = cfg.AdminRoleId,
+                AdminRoleIds = cfg.AdminRoleIds.ToList(),
                 Reason = "User appealed a moderation warning"
             };
 
@@ -644,7 +667,11 @@ namespace PiratBotCSharp.Modules
                 .WithTimestamp(DateTimeOffset.UtcNow)
                 .Build();
 
-            var mention = adminRole != null ? $"{user.Mention} {adminRole.Mention}" : user.Mention;
+            var roleMentions = cfg.AdminRoleIds
+                .Select(id => guild.GetRole(id))
+                .Where(r => r != null)
+                .Select(r => r!.Mention);
+            var mention = $"{user.Mention} {string.Join(" ", roleMentions)}".Trim();
             await ticketChannel.SendMessageAsync(mention, embed: intro);
 
             await component.RespondAsync($"Appeal ticket created: {ticketChannel.Mention}", ephemeral: true);
@@ -657,7 +684,7 @@ namespace PiratBotCSharp.Modules
 
             var cfg = GetConfig(guild.Id);
             var isOwner = meta.UserId == closedBy.Id;
-            var hasAdminRole = cfg.AdminRoleId.HasValue && closedBy.Roles.Any(r => r.Id == cfg.AdminRoleId.Value);
+            var hasAdminRole = cfg.AdminRoleIds.Any(id => closedBy.Roles.Any(r => r.Id == id));
             var isAdminPerm = closedBy.GuildPermissions.Administrator;
 
             if (!isOwner && !hasAdminRole && !isAdminPerm)
@@ -791,11 +818,13 @@ namespace PiratBotCSharp.Modules
                 var cfg = GetConfig(user.Guild.Id);
                 if (!cfg.Enabled) return;
 
-                var reasons = new List<string>();
+                var signals = new List<(string reason, int points)>();
 
                 var accountAge = DateTimeOffset.UtcNow - user.CreatedAt;
-                if (accountAge.TotalDays < 20)
-                    reasons.Add($"Account age < 20 days ({accountAge.TotalDays:F0} days)");
+                if (accountAge.TotalDays < 3)
+                    signals.Add(($"Very new account ({accountAge.TotalDays:F0} days old)", 5));
+                else if (accountAge.TotalDays < 10)
+                    signals.Add(($"New account ({accountAge.TotalDays:F0} days old)", 3));
 
                 var username = user.Username.ToLowerInvariant();
                 var suspiciousUsernamePatterns = new[]
@@ -813,29 +842,98 @@ namespace PiratBotCSharp.Modules
                 {
                     if (Regex.IsMatch(username, pattern, RegexOptions.IgnoreCase))
                     {
-                        reasons.Add($"Suspicious username pattern: {pattern}");
+                        signals.Add(($"Suspicious username pattern: `{pattern}`", 2));
                         break;
                     }
                 }
 
-                var avatarUrl = user.GetAvatarUrl(size: 256);
-                if (avatarUrl == null)
-                    reasons.Add("No custom profile picture");
+                if (user.GetAvatarUrl(size: 256) == null)
+                    signals.Add(("No custom profile picture", 2));
 
-                if (user.Discriminator != null)
+                if (signals.Count == 0) return;
+
+                var score = signals.Sum(s => s.points);
+                var reasons = signals.Select(s => $"{s.reason} (+{s.points})").ToList();
+
+                if (cfg.AutoBanSuspiciousUsers && score >= 4)
                 {
-                    var disc = user.Discriminator;
-                    if (disc.Length > 0 && disc.All(c => c == disc[0]))
-                        reasons.Add($"Suspicious discriminator pattern: #{disc}");
+                    await AutoBanUserAsync(user, reasons, score);
                 }
-
-                if (reasons.Count == 0) return;
-
-                await LogSuspiciousUser(user, reasons);
+                else
+                {
+                    await LogSuspiciousUser(user, reasons);
+                }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"HandleUserJoined error: {ex.Message}");
+            }
+        }
+
+        public static async Task HandleImageSpamAsync(SocketGuildUser user, SocketGuild guild)
+        {
+            try
+            {
+                var cfg = GetConfig(guild.Id);
+                if (!cfg.Enabled || !cfg.AutoBanSuspiciousUsers) return;
+
+                var now = DateTimeOffset.UtcNow;
+                lock (_imageLock)
+                {
+                    if (!_imageSendTimes.ContainsKey(user.Id))
+                        _imageSendTimes[user.Id] = new List<DateTimeOffset>();
+
+                    _imageSendTimes[user.Id].Add(now);
+                    _imageSendTimes[user.Id].RemoveAll(t => (now - t).TotalSeconds > 30);
+
+                    if (_imageSendTimes[user.Id].Count < 3) return;
+                    _imageSendTimes.Remove(user.Id);
+                }
+
+                var joinedAgo = now - user.JoinedAt;
+                if (joinedAgo?.TotalHours > 1) return;
+
+                var reasons = new List<string>
+                {
+                    $"Sent 3+ images within 30 seconds of joining (+3)",
+                    $"Account age: {(now - user.CreatedAt).TotalDays:F0} days"
+                };
+                await AutoBanUserAsync(user, reasons, 3);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"HandleImageSpam error: {ex.Message}");
+            }
+        }
+
+        private static async Task AutoBanUserAsync(SocketGuildUser user, List<string> reasons, int score)
+        {
+            try
+            {
+                var cfg = GetConfig(user.Guild.Id);
+                var auditReason = $"Auto-ban: Suspicious account (score {score}) — " + string.Join("; ", reasons);
+                await user.Guild.AddBanAsync(user, 7, auditReason);
+
+                if (!cfg.LogChannelId.HasValue) return;
+                var logChannel = user.Guild.GetTextChannel(cfg.LogChannelId.Value);
+                if (logChannel == null) return;
+
+                var embed = new EmbedBuilder()
+                    .WithTitle("🔨 Auto-Ban: Suspicious Account")
+                    .WithColor(new Color(0xED4245))
+                    .WithThumbnailUrl(user.GetAvatarUrl() ?? user.GetDefaultAvatarUrl())
+                    .WithDescription($"**User:** {user.Mention} (`{user.Id}`)\n**Username:** {user.Username}\n**Account created:** <t:{user.CreatedAt.ToUnixTimeSeconds()}:R>\n**Risk score:** {score}/10")
+                    .AddField("Signals detected", string.Join("\n", reasons.Select(r => $"• {r}")), false)
+                    .AddField("Action taken", "User permanently banned.\nMessages from the last **7 days** deleted.", false)
+                    .WithFooter("Auto-moderation — PiratBot")
+                    .WithTimestamp(DateTimeOffset.UtcNow)
+                    .Build();
+
+                await logChannel.SendMessageAsync(embed: embed);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"AutoBanUser error: {ex.Message}");
             }
         }
 
@@ -914,8 +1012,59 @@ namespace PiratBotCSharp.Modules
                 var rawContent = message.Content ?? string.Empty;
                 var normalized = Normalize(rawContent);
 
+                // 0a) CAPS check — delete silently, no DM, no strike
+                var letters = rawContent.Where(char.IsLetter).ToArray();
+                if (letters.Length > 15 && letters.Count(c => char.IsUpper(c)) / (double)letters.Length > 0.8)
+                {
+                    try { await message.DeleteAsync(); } catch { }
+                    return;
+                }
+
+                // 0b) Gibberish — single very long word (no spaces, >35 chars, not a URL)
+                var words = rawContent.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (words.Length == 1 && words[0].Length > 35 && !Regex.IsMatch(words[0], @"https?://|www\."))
+                {
+                    var v = new ViolationResult
+                    {
+                        Category = ViolationCategory.Gibberish,
+                        Severity = ViolationSeverity.High,
+                        Reason = "Gibberish message detected",
+                        Matched = "long random string"
+                    };
+                    await HandleViolationAsync(message, guild, cfg, v);
+                    return;
+                }
+
                 bool containsInvite = InviteRegex.IsMatch(rawContent);
                 bool containsLink = containsInvite || LinkRegex.IsMatch(rawContent);
+
+                // 0c) Link spam — same user sends 4+ messages with links within 60 seconds
+                if (containsLink && message.Author is SocketGuildUser linkUser)
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    bool isLinkSpam = false;
+                    lock (_linkLock)
+                    {
+                        if (!_linkSendTimes.ContainsKey(linkUser.Id))
+                            _linkSendTimes[linkUser.Id] = new List<DateTimeOffset>();
+                        _linkSendTimes[linkUser.Id].Add(now);
+                        _linkSendTimes[linkUser.Id].RemoveAll(t => (now - t).TotalSeconds > 60);
+                        isLinkSpam = _linkSendTimes[linkUser.Id].Count >= 4;
+                        if (isLinkSpam) _linkSendTimes.Remove(linkUser.Id);
+                    }
+                    if (isLinkSpam)
+                    {
+                        var v = new ViolationResult
+                        {
+                            Category = ViolationCategory.LinkSpam,
+                            Severity = ViolationSeverity.High,
+                            Reason = "Repeated link spam (4+ links in 60 seconds)",
+                            Matched = "repeated links"
+                        };
+                        await HandleViolationAsync(message, guild, cfg, v);
+                        return;
+                    }
+                }
                 
                 Console.WriteLine($"[SECURITY-CHECK] Invite={containsInvite}, Link={containsLink}, BlockInvites={cfg.BlockInvites}, BlockLinks={cfg.BlockLinks}");
 
@@ -934,15 +1083,17 @@ namespace PiratBotCSharp.Modules
                     return;
                 }
 
-                // 2) Spam: repeated chars/patterns
-                if (Regex.IsMatch(rawContent, @"([a-zA-Z0-9])\1{6,}") || Regex.IsMatch(rawContent, @"(.)\s*\1{6,}"))
+                // 2) Spam: single character repetition OR repeated word/phrase pattern
+                bool isCharSpam = Regex.IsMatch(rawContent, @"([a-zA-Z0-9])\1{6,}");
+                bool isPhraseSpam = Regex.IsMatch(rawContent, @"(.{2,30}?)\1{4,}", RegexOptions.IgnoreCase);
+                if (isCharSpam || isPhraseSpam)
                 {
                     var v = new ViolationResult
                     {
                         Category = ViolationCategory.Spam,
-                        Severity = ViolationSeverity.Medium,
+                        Severity = ViolationSeverity.High,
                         Reason = "Spam pattern detected",
-                        Matched = "repeated characters"
+                        Matched = isCharSpam ? "repeated characters" : "repeated phrase/word"
                     };
                     await HandleViolationAsync(message, guild, cfg, v);
                     return;
@@ -1310,6 +1461,8 @@ namespace PiratBotCSharp.Modules
 
     public class SecurityCommands : ModuleBase<SocketCommandContext>
     {
+        private sealed record ModerationContext(string Reason, string? MessageLink, ulong? IgnoredAdminId);
+
         [Command("setsecuritymod")]
         [Summary("Setup security system (Admin only)")]
         [RequirePirateAdmin]
@@ -1514,15 +1667,17 @@ namespace PiratBotCSharp.Modules
             {
                 var config = SecurityService.GetConfig(Context.Guild.Id);
 
+                var adminRolesText = config.AdminRoleIds.Any()
+                    ? string.Join(", ", config.AdminRoleIds.Select(id => $"<@&{id}>"))
+                    : "Not set";
+
                 var desc =
                     $"**Enabled:** {(config.Enabled ? "Yes" : "No")}\n" +
                     $"**Log Channel:** {(config.LogChannelId.HasValue ? $"<#{config.LogChannelId.Value}>" : "Not set")}\n" +
                     $"**Warn Channel:** {(config.WarnChannelId.HasValue ? $"<#{config.WarnChannelId.Value}>" : "Not set")}\n" +
-                    $"**Admin Role:** {(config.AdminRoleId.HasValue ? $"<@&{config.AdminRoleId.Value}>" : "Not set")}\n" +
-                    $"**Timeout Enabled:** {(config.TimeoutEnabled ? "Yes" : "No")}\n" +
-                    $"**Timeout Seconds:** {config.TimeoutSeconds}\n" +
-                    $"**Strikes for Timeout:** {config.MaxStrikesBeforeTimeout}\n" +
-                    $"**Cooldown Seconds:** {config.CooldownSeconds}\n" +
+                    $"**Admin Roles:** {adminRolesText}\n" +
+                    $"**18+ Role:** {(config.Age18RoleId.HasValue ? $"<@&{config.Age18RoleId.Value}>" : "Not set")}\n" +
+                    $"**18+ Voice:** {(config.Age18VoiceChannelId.HasValue ? $"<#{config.Age18VoiceChannelId.Value}>" : "Not set")}\n" +
                     $"**Block Invites:** {(config.BlockInvites ? "Yes" : "No")}\n" +
                     $"**Block Links:** {(config.BlockLinks ? "Yes" : "No")}";
 
@@ -1531,6 +1686,225 @@ namespace PiratBotCSharp.Modules
             catch (Exception ex)
             {
                 await ReplyAsync(embed: EmbedFactory.BuildError("Status Failed", ex.Message));
+            }
+        }
+
+        [Command("timeouts")]
+        [Summary("List all members currently in timeout")]
+        [RequirePirateAdmin]
+        public async Task ListTimeoutsAsync()
+        {
+            await Context.Guild.DownloadUsersAsync();
+
+            var now = DateTimeOffset.UtcNow;
+            var timedOut = Context.Guild.Users
+                .Where(u => u.TimedOutUntil.HasValue && u.TimedOutUntil.Value > now)
+                .OrderBy(u => u.TimedOutUntil!.Value)
+                .ToList();
+
+            if (!timedOut.Any())
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildInfo("Active Timeouts", "No members are currently in timeout."));
+                return;
+            }
+
+            var lines = timedOut.Select(u =>
+            {
+                var remaining = u.TimedOutUntil!.Value - now;
+                var remainingText = remaining.TotalHours >= 1
+                    ? $"{(int)remaining.TotalHours}h {remaining.Minutes}m"
+                    : $"{remaining.Minutes}m {remaining.Seconds}s";
+                return $"{u.Mention} — expires <t:{u.TimedOutUntil.Value.ToUnixTimeSeconds()}:R> ({remainingText} remaining)";
+            });
+
+            var embed = new EmbedBuilder()
+                .WithTitle($"Active Timeouts — {timedOut.Count} member{(timedOut.Count == 1 ? "" : "s")}")
+                .WithDescription(string.Join("\n", lines))
+                .WithColor(new Color(0xFEE75C))
+                .WithTimestamp(DateTimeOffset.UtcNow)
+                .Build();
+
+            await ReplyAsync(embed: embed);
+        }
+
+        [Command("security-add-admin")]
+        [Summary("Add a role to the admin roles list")]
+        [RequirePirateAdmin]
+        public async Task SecurityAddAdminAsync(SocketRole role)
+        {
+            var config = SecurityService.GetConfig(Context.Guild.Id);
+            if (config.AdminRoleIds.Contains(role.Id))
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildInfo("Already Configured", $"{role.Mention} is already in the admin roles list."));
+                return;
+            }
+            config.AdminRoleIds.Add(role.Id);
+            SecurityService.SetConfig(Context.Guild.Id, config);
+            await ReplyAsync(embed: EmbedFactory.BuildInfo("Admin Role Added",
+                $"{role.Mention} has been added as an admin role.\n**Total admin roles:** {config.AdminRoleIds.Count}"));
+        }
+
+        [Command("security-autoban")]
+        [Summary("Enable or disable automatic banning of suspicious new accounts (on/off)")]
+        [RequirePirateAdmin]
+        public async Task SecurityAutobanAsync(string toggle)
+        {
+            if (toggle.ToLower() is not ("on" or "off"))
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildError("Invalid Option", "Use `?security-autoban on` or `?security-autoban off`."));
+                return;
+            }
+
+            var config = SecurityService.GetConfig(Context.Guild.Id);
+            config.AutoBanSuspiciousUsers = toggle.ToLower() == "on";
+            SecurityService.SetConfig(Context.Guild.Id, config);
+
+            await ReplyAsync(embed: EmbedFactory.BuildInfo("Auto-Ban Updated",
+                config.AutoBanSuspiciousUsers
+                    ? "✅ Auto-ban is now **enabled**.\n\nThe bot will automatically ban accounts with a suspicion score ≥ 4:\n• Account < 10 days old → 3 pts\n• Account < 3 days old → 5 pts\n• No profile picture → 2 pts\n• Suspicious username → 2 pts\n• Image spam (3+ in 30s) → 3 pts\n\nAll messages from the last **7 days** will be deleted on ban."
+                    : "❌ Auto-ban is now **disabled**.\nSuspicious users will still be logged, but not banned automatically."));
+        }
+
+        [Command("security-autotimeout")]
+        [Summary("Enable or disable automatic timeout for repeated violations (on/off)")]
+        [RequirePirateAdmin]
+        public async Task SecurityAutoTimeoutAsync(string toggle)
+        {
+            if (toggle.ToLower() is not ("on" or "off"))
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildError("Invalid Option", "Use `?security-autotimeout on` or `?security-autotimeout off`."));
+                return;
+            }
+
+            var config = SecurityService.GetConfig(Context.Guild.Id);
+            config.TimeoutEnabled = toggle.ToLower() == "on";
+            SecurityService.SetConfig(Context.Guild.Id, config);
+
+            await ReplyAsync(embed: EmbedFactory.BuildInfo("Auto-Timeout Updated",
+                config.TimeoutEnabled
+                    ? $"✅ Auto-timeout is now **enabled**.\nMembers will be automatically timed out after **{config.MaxStrikesBeforeTimeout} strikes** ({config.TimeoutSeconds}s)."
+                    : "❌ Auto-timeout is now **disabled**.\nMembers will only receive warnings for violations."));
+        }
+
+        [Command("security-remove-admin")]
+        [Summary("Remove a role from the admin roles list")]
+        [RequirePirateAdmin]
+        public async Task SecurityRemoveAdminAsync(SocketRole role)
+        {
+            var config = SecurityService.GetConfig(Context.Guild.Id);
+            if (!config.AdminRoleIds.Contains(role.Id))
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildInfo("Not Found", $"{role.Mention} is not in the admin roles list."));
+                return;
+            }
+            config.AdminRoleIds.Remove(role.Id);
+            SecurityService.SetConfig(Context.Guild.Id, config);
+            await ReplyAsync(embed: EmbedFactory.BuildInfo("Admin Role Removed",
+                $"{role.Mention} has been removed.\n**Remaining admin roles:** {config.AdminRoleIds.Count}"));
+        }
+
+        [Command("channel18")]
+        [Summary("Setup 18+ voice access with a required role")]
+        [RequirePirateAdmin]
+        [RequireBotPermission(GuildPermission.ManageChannels)]
+        [RequireBotPermission(GuildPermission.ManageRoles)]
+        public async Task Channel18Async(ulong roleId)
+        {
+            try
+            {
+                var role = Context.Guild.GetRole(roleId);
+                if (role == null)
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Role Not Found", "The provided role ID does not exist in this server."));
+                    return;
+                }
+
+                var config = SecurityService.GetConfig(Context.Guild.Id);
+                config.Age18RoleId = roleId;
+                SecurityService.SetConfig(Context.Guild.Id, config);
+
+                await ReplyAsync(embed: EmbedFactory.BuildInfo(
+                    "18+ Voice Setup",
+                    $"Stored 18+ role: <@&{roleId}>\n\n" +
+                    "Reply with `have VOICE_CHANNEL_ID` to use an existing voice channel,\n" +
+                    "or reply with `create` to create a new 18+ voice channel."));
+
+                var response = await NextMessageAsync(TimeSpan.FromMinutes(1));
+                if (response == null)
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Timeout", "Setup timed out. Run `?channel18 ROLE_ID` again."));
+                    return;
+                }
+
+                IVoiceChannel? targetVoice = null;
+                var input = response.Content.Trim();
+
+                if (input.Equals("create", StringComparison.OrdinalIgnoreCase))
+                {
+                    ulong? categoryId = null;
+                    if (Context.Channel is SocketTextChannel currentTextChannel && currentTextChannel.CategoryId.HasValue)
+                    {
+                        categoryId = currentTextChannel.CategoryId.Value;
+                    }
+
+                    targetVoice = await Context.Guild.CreateVoiceChannelAsync("🔞 18+ Voice", props =>
+                    {
+                        if (categoryId.HasValue)
+                        {
+                            props.CategoryId = categoryId.Value;
+                        }
+                    });
+                }
+                else if (input.StartsWith("have ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rawChannelId = input.Substring(5).Trim();
+                    if (rawChannelId.StartsWith("<#") && rawChannelId.EndsWith(">"))
+                    {
+                        rawChannelId = rawChannelId.Trim('<', '#', '>');
+                    }
+
+                    if (!ulong.TryParse(rawChannelId, out var voiceChannelId))
+                    {
+                        await ReplyAsync(embed: EmbedFactory.BuildError("Invalid Input", "Provide `have VOICE_CHANNEL_ID` or `create`."));
+                        return;
+                    }
+
+                    targetVoice = Context.Guild.GetVoiceChannel(voiceChannelId);
+                    if (targetVoice == null)
+                    {
+                        await ReplyAsync(embed: EmbedFactory.BuildError("Channel Not Found", "Voice channel not found in this server."));
+                        return;
+                    }
+                }
+                else
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Invalid Input", "Provide `have VOICE_CHANNEL_ID` or `create`."));
+                    return;
+                }
+
+                await targetVoice.AddPermissionOverwriteAsync(
+                    Context.Guild.EveryoneRole,
+                    new OverwritePermissions(viewChannel: PermValue.Allow, connect: PermValue.Deny));
+
+                await targetVoice.AddPermissionOverwriteAsync(
+                    role,
+                    new OverwritePermissions(viewChannel: PermValue.Allow, connect: PermValue.Allow, speak: PermValue.Allow));
+
+                await targetVoice.AddPermissionOverwriteAsync(
+                    Context.Guild.CurrentUser,
+                    new OverwritePermissions(viewChannel: PermValue.Allow, connect: PermValue.Allow, speak: PermValue.Allow, manageChannel: PermValue.Allow));
+
+                config.Age18VoiceChannelId = targetVoice.Id;
+                SecurityService.SetConfig(Context.Guild.Id, config);
+
+                await ReplyAsync(embed: EmbedFactory.BuildSuccess(
+                    "18+ Voice Ready",
+                    $"Role: <@&{roleId}>\nVoice: <#{targetVoice.Id}>\n\n" +
+                    "Rules set:\n- Channel is visible for everyone\n- Only members with the 18+ role can connect"));
+            }
+            catch (Exception ex)
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildError("18+ Setup Failed", ex.Message));
             }
         }
 
@@ -1602,6 +1976,162 @@ namespace PiratBotCSharp.Modules
             }
         }
 
+        [Command("send-discussion")]
+        [Summary("Move a discussion range into a private ticket channel and clean the source channel")]
+        [RequireBotPermission(GuildPermission.ManageChannels)]
+        [RequireBotPermission(GuildPermission.ManageMessages)]
+        public async Task SendDiscussionAsync(ulong startMessageId, ulong endMessageId)
+        {
+            try
+            {
+                if (Context.Channel is not SocketTextChannel sourceChannel)
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Invalid Channel", "This command can only be used in a server text channel."));
+                    return;
+                }
+
+                var securityConfig = SecurityService.GetConfig(Context.Guild.Id);
+                var configuredAdminRoleIds = securityConfig.AdminRoleIds?.ToHashSet() ?? new HashSet<ulong>();
+                if (!configuredAdminRoleIds.Any() && securityConfig.AdminRoleId.HasValue)
+                {
+                    configuredAdminRoleIds.Add(securityConfig.AdminRoleId.Value);
+                }
+
+                if (!configuredAdminRoleIds.Any())
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Missing Security Setup", "No admin roles configured. Run `?setsecuritymod` first."));
+                    return;
+                }
+
+                if (Context.User is not SocketGuildUser commandUser || !commandUser.Roles.Any(r => configuredAdminRoleIds.Contains(r.Id)))
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Access Denied", "Only configured security admin roles can use this command."));
+                    return;
+                }
+
+                if (startMessageId > endMessageId)
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Invalid Range", "The first message ID must be older than or equal to the second message ID."));
+                    return;
+                }
+
+                var ticketConfig = PirateService.GetTicketConfig(Context.Guild.Id);
+                if (!ticketConfig.TicketCategoryId.HasValue)
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Missing Ticket Setup", "Ticket category is not configured. Run the pirate ticket setup first."));
+                    return;
+                }
+
+                var category = Context.Guild.GetCategoryChannel(ticketConfig.TicketCategoryId.Value);
+                if (category == null)
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("Category Not Found", "Configured ticket category no longer exists. Run the pirate ticket setup again."));
+                    return;
+                }
+
+                var inRangeMessages = await FetchMessagesInRangeAsync(sourceChannel, startMessageId, endMessageId);
+                if (inRangeMessages.Count == 0)
+                {
+                    await ReplyAsync(embed: EmbedFactory.BuildError("No Messages Found", "No messages were found in the provided range in this channel."));
+                    return;
+                }
+
+                var participantIds = inRangeMessages
+                    .Select(m => m.Author.Id)
+                    .Distinct()
+                    .ToHashSet();
+
+                var roleIdsForAccess = new HashSet<ulong>(configuredAdminRoleIds);
+                if (ticketConfig.SupportRoleId.HasValue)
+                {
+                    roleIdsForAccess.Add(ticketConfig.SupportRoleId.Value);
+                }
+
+                if (ticketConfig.SupportRoleIds != null)
+                {
+                    foreach (var roleId in ticketConfig.SupportRoleIds)
+                    {
+                        roleIdsForAccess.Add(roleId);
+                    }
+                }
+
+                var random = new Random();
+                var ticketName = $"discussion-ticket{random.Next(1000, 9999)}";
+
+                var overwrites = new List<Overwrite>
+                {
+                    new Overwrite(Context.Guild.EveryoneRole.Id, PermissionTarget.Role, new OverwritePermissions(viewChannel: PermValue.Deny))
+                };
+
+                foreach (var roleId in roleIdsForAccess)
+                {
+                    var role = Context.Guild.GetRole(roleId);
+                    if (role == null)
+                    {
+                        continue;
+                    }
+
+                    overwrites.Add(new Overwrite(role.Id, PermissionTarget.Role,
+                        new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, readMessageHistory: PermValue.Allow)));
+                }
+
+                foreach (var userId in participantIds)
+                {
+                    var user = Context.Guild.GetUser(userId);
+                    if (user == null)
+                    {
+                        continue;
+                    }
+
+                    overwrites.Add(new Overwrite(user.Id, PermissionTarget.User,
+                        new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, readMessageHistory: PermValue.Allow)));
+                }
+
+                var ticketChannel = await Context.Guild.CreateTextChannelAsync(ticketName, props =>
+                {
+                    props.CategoryId = category.Id;
+                    props.PermissionOverwrites = overwrites;
+                    props.Topic = $"Discussion export from #{sourceChannel.Name} ({startMessageId} - {endMessageId})";
+                });
+
+                int postedItems = 0;
+
+                foreach (var message in inRangeMessages)
+                {
+                    var discussionEmbed = BuildDiscussionEmbed(Context.Guild, message);
+                    await ticketChannel.SendMessageAsync(embed: discussionEmbed);
+                    postedItems++;
+
+                    var reactionSummary = await BuildReactionSummaryAsync(message);
+                    if (!string.IsNullOrWhiteSpace(reactionSummary))
+                    {
+                        await SendChunkedMessageAsync(ticketChannel, reactionSummary);
+                    }
+                }
+
+                int deletedCount = 0;
+                foreach (var message in inRangeMessages)
+                {
+                    try
+                    {
+                        await message.DeleteAsync();
+                        deletedCount++;
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                await ReplyAsync(embed: EmbedFactory.BuildSuccess(
+                    "Discussion Moved",
+                    $"Created {ticketChannel.Mention}\nMessages exported: **{postedItems}**\nOriginal messages deleted: **{deletedCount}**"));
+            }
+            catch (Exception ex)
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildError("Send Discussion Failed", ex.Message));
+            }
+        }
+
         // -------------------------
         // Cleanup commands (embed-only)
         // -------------------------
@@ -1614,60 +2144,89 @@ namespace PiratBotCSharp.Modules
         {
             try
             {
-                var start = await ReplyAsync(embed: EmbedFactory.BuildInfo("Cleanup Started", $"Cleaning messages in {Context.Channel.Name}."));
-
                 int totalDeleted = 0;
-                bool hasMore = true;
 
-                while (hasMore)
+                var allMessages = new List<IMessage>();
+                ulong? beforeId = null;
+
+                while (true)
                 {
-                    var messages = await Context.Channel.GetMessagesAsync(100).FlattenAsync();
-                    var deleteable = messages.Where(x => !x.IsPinned && x.Id != start.Id).ToList();
+                    var messages = beforeId.HasValue
+                        ? await Context.Channel.GetMessagesAsync(beforeId.Value, Direction.Before, 100).FlattenAsync()
+                        : await Context.Channel.GetMessagesAsync(100).FlattenAsync();
 
-                    if (!deleteable.Any())
+                    var batch = messages.ToList();
+                    if (!batch.Any())
                     {
-                        hasMore = false;
                         break;
                     }
 
-                    var recent = deleteable.Where(x => DateTimeOffset.UtcNow - x.Timestamp < TimeSpan.FromDays(14)).ToList();
-                    var old = deleteable.Where(x => DateTimeOffset.UtcNow - x.Timestamp >= TimeSpan.FromDays(14)).ToList();
+                    allMessages.AddRange(batch.Where(x => !x.IsPinned && x.Id != Context.Message.Id));
 
-                    if (recent.Count > 1)
+                    if (batch.Count < 100)
                     {
+                        break;
+                    }
+
+                    beforeId = batch.Min(x => x.Id);
+                    if (!beforeId.HasValue || beforeId.Value == 0)
+                    {
+                        break;
+                    }
+                }
+
+                var recent = allMessages
+                    .Where(x => DateTimeOffset.UtcNow - x.Timestamp < TimeSpan.FromDays(14))
+                    .ToList();
+
+                var old = allMessages
+                    .Where(x => DateTimeOffset.UtcNow - x.Timestamp >= TimeSpan.FromDays(14))
+                    .ToList();
+
+                var textChannel = Context.Channel as ITextChannel;
+                if (textChannel != null)
+                {
+                    foreach (var chunk in recent.Chunk(100))
+                    {
+                        var chunkList = chunk.ToList();
+                        if (chunkList.Count == 0)
+                        {
+                            continue;
+                        }
+
                         try
                         {
-                            await (Context.Channel as ITextChannel)!.DeleteMessagesAsync(recent);
-                            totalDeleted += recent.Count;
+                            if (chunkList.Count > 1)
+                            {
+                                await textChannel.DeleteMessagesAsync(chunkList);
+                                totalDeleted += chunkList.Count;
+                            }
+                            else
+                            {
+                                await chunkList[0].DeleteAsync();
+                                totalDeleted++;
+                            }
                         }
                         catch
                         {
-                            foreach (var msg in recent)
+                            foreach (var msg in chunkList)
                             {
                                 try { await msg.DeleteAsync(); totalDeleted++; } catch { }
                             }
                         }
                     }
-                    else if (recent.Count == 1)
-                    {
-                        try { await recent.First().DeleteAsync(); totalDeleted++; } catch { }
-                    }
-
-                    foreach (var msg in old)
-                    {
-                        try { await msg.DeleteAsync(); totalDeleted++; await Task.Delay(100); } catch { }
-                    }
-
-                    if (messages.Count() < 100) hasMore = false;
                 }
 
-                try { await start.DeleteAsync(); } catch { }
+                foreach (var msg in old)
+                {
+                    try { await msg.DeleteAsync(); totalDeleted++; } catch { }
+                }
 
-                var result = await ReplyAsync(embed: EmbedFactory.BuildSuccess(
+                try { await Context.Message.DeleteAsync(); totalDeleted++; } catch { }
+
+                await ReplyAsync(embed: EmbedFactory.BuildSuccess(
                     "Cleanup Complete",
                     $"Deleted **{totalDeleted}** messages in {Context.Channel.Name}."));
-
-                _ = Task.Delay(5000).ContinueWith(async _ => { try { await result.DeleteAsync(); } catch { } });
             }
             catch (Exception ex)
             {
@@ -1860,6 +2419,492 @@ namespace PiratBotCSharp.Modules
             {
                 await ReplyAsync(embed: EmbedFactory.BuildError("Failed", ex.Message));
             }
+        }
+
+        [Command("kick")]
+        [Summary("Kick a member and DM them the reason")]
+        [RequirePirateAdmin]
+        [RequireUserPermission(GuildPermission.KickMembers)]
+        [RequireBotPermission(GuildPermission.KickMembers)]
+        public async Task KickAsync(ulong targetUserId, [Remainder] string? details = null)
+        {
+            await ExecuteModerationAsync("KICK", targetUserId, details, async user =>
+            {
+                var reason = BuildAuditReason("KICK", details);
+                await user.KickAsync(reason, new RequestOptions { AuditLogReason = reason });
+            });
+        }
+
+        private static Embed BuildDiscussionEmbed(SocketGuild guild, IMessage message)
+        {
+            var guildUser = message.Author as SocketGuildUser ?? guild.GetUser(message.Author.Id);
+            var avatar = message.Author.GetAvatarUrl() ?? message.Author.GetDefaultAvatarUrl();
+            var highestRole = guildUser?.Roles
+                .Where(r => r.Id != guild.EveryoneRole.Id)
+                .OrderByDescending(r => r.Position)
+                .FirstOrDefault();
+
+            var highestRoleText = highestRole?.Name ?? "No role";
+            var authorName = guildUser?.DisplayName ?? message.Author.Username;
+
+            var content = string.IsNullOrWhiteSpace(message.Content) ? "[no text]" : message.Content;
+            if (content.Length > 3900)
+            {
+                content = content.Substring(0, 3900) + "...";
+            }
+
+            if (message.Attachments.Count > 0)
+            {
+                var attachmentLines = string.Join("\n", message.Attachments.Select(a => a.Url));
+                content = content + "\n\nAttachments:\n" + attachmentLines;
+                if (content.Length > 3900)
+                {
+                    content = content.Substring(0, 3900) + "...";
+                }
+            }
+
+            var sentAtLocal = message.Timestamp.ToLocalTime().ToString("hh:mm tt", CultureInfo.InvariantCulture);
+            var userColor = GetDiscussionColorForUser(message.Author.Id);
+
+            return new EmbedBuilder()
+                .WithAuthor($"{authorName} | {highestRoleText}", avatar)
+                .WithDescription(content)
+                .WithColor(userColor)
+                .WithFooter($"Original time: {sentAtLocal}")
+                .Build();
+        }
+
+        private static Color GetDiscussionColorForUser(ulong userId)
+        {
+            var seed = unchecked((int)(userId ^ (userId >> 32)));
+            var random = new Random(seed);
+
+            var hue = random.NextDouble() * 360.0;
+            var saturation = 0.55 + (random.NextDouble() * 0.25);
+            var value = 0.70 + (random.NextDouble() * 0.20);
+
+            return ColorFromHsv(hue, saturation, value);
+        }
+
+        private static Color ColorFromHsv(double hue, double saturation, double value)
+        {
+            var chroma = value * saturation;
+            var hueSection = hue / 60.0;
+            var x = chroma * (1 - Math.Abs((hueSection % 2) - 1));
+            var m = value - chroma;
+
+            double rPrime;
+            double gPrime;
+            double bPrime;
+
+            if (hueSection < 1)
+            {
+                rPrime = chroma;
+                gPrime = x;
+                bPrime = 0;
+            }
+            else if (hueSection < 2)
+            {
+                rPrime = x;
+                gPrime = chroma;
+                bPrime = 0;
+            }
+            else if (hueSection < 3)
+            {
+                rPrime = 0;
+                gPrime = chroma;
+                bPrime = x;
+            }
+            else if (hueSection < 4)
+            {
+                rPrime = 0;
+                gPrime = x;
+                bPrime = chroma;
+            }
+            else if (hueSection < 5)
+            {
+                rPrime = x;
+                gPrime = 0;
+                bPrime = chroma;
+            }
+            else
+            {
+                rPrime = chroma;
+                gPrime = 0;
+                bPrime = x;
+            }
+
+            var r = (byte)Math.Round((rPrime + m) * 255);
+            var g = (byte)Math.Round((gPrime + m) * 255);
+            var b = (byte)Math.Round((bPrime + m) * 255);
+
+            return new Color(r, g, b);
+        }
+
+        private static async Task<string> BuildReactionSummaryAsync(IMessage message)
+        {
+            if (message is not IUserMessage userMessage || message.Reactions == null || message.Reactions.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var lines = new List<string>();
+
+            foreach (var reaction in message.Reactions)
+            {
+                List<IUser> users;
+                try
+                {
+                    users = (await userMessage.GetReactionUsersAsync(reaction.Key, 100).FlattenAsync()).ToList();
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (var user in users.Where(u => !u.IsBot))
+                {
+                    lines.Add($"*{user.Username} reacted with {reaction.Key} on the message.*");
+                }
+            }
+
+            return string.Join("\n", lines.Distinct());
+        }
+
+        private static async Task SendChunkedMessageAsync(IMessageChannel channel, string content)
+        {
+            const int limit = 1900;
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return;
+            }
+
+            if (content.Length <= limit)
+            {
+                await channel.SendMessageAsync(content);
+                return;
+            }
+
+            var lines = content.Split('\n');
+            var buffer = new StringBuilder();
+
+            foreach (var line in lines)
+            {
+                var candidate = buffer.Length == 0 ? line : buffer + "\n" + line;
+                if (candidate.Length > limit)
+                {
+                    await channel.SendMessageAsync(buffer.ToString());
+                    buffer.Clear();
+                    buffer.Append(line);
+                }
+                else
+                {
+                    if (buffer.Length > 0)
+                    {
+                        buffer.Append('\n');
+                    }
+                    buffer.Append(line);
+                }
+            }
+
+            if (buffer.Length > 0)
+            {
+                await channel.SendMessageAsync(buffer.ToString());
+            }
+        }
+
+        private static async Task<List<IMessage>> FetchMessagesInRangeAsync(SocketTextChannel channel, ulong startMessageId, ulong endMessageId)
+        {
+            var collected = new List<IMessage>();
+            ulong? beforeId = null;
+            bool reachedStart = false;
+
+            while (!reachedStart)
+            {
+                var batch = beforeId == null
+                    ? await channel.GetMessagesAsync(100).FlattenAsync()
+                    : await channel.GetMessagesAsync(beforeId.Value, Direction.Before, 100).FlattenAsync();
+
+                var ordered = batch
+                    .OrderByDescending(m => m.Id)
+                    .ToList();
+
+                if (ordered.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var message in ordered)
+                {
+                    if (message.Id > endMessageId)
+                    {
+                        continue;
+                    }
+
+                    if (message.Id < startMessageId)
+                    {
+                        reachedStart = true;
+                        break;
+                    }
+
+                    collected.Add(message);
+
+                    if (message.Id == startMessageId)
+                    {
+                        reachedStart = true;
+                        break;
+                    }
+                }
+
+                beforeId = ordered.Min(m => m.Id);
+                if (ordered.Count < 100)
+                {
+                    break;
+                }
+            }
+
+            return collected
+                .Where(m => m.Id >= startMessageId && m.Id <= endMessageId)
+                .OrderBy(m => m.Id)
+                .ToList();
+        }
+
+        [Command("ban")]
+        [Summary("Ban a member and DM them the reason")]
+        [RequirePirateAdmin]
+        [RequireUserPermission(GuildPermission.BanMembers)]
+        [RequireBotPermission(GuildPermission.BanMembers)]
+        public async Task BanAsync(ulong targetUserId, [Remainder] string? details = null)
+        {
+            await ExecuteModerationAsync("BAN", targetUserId, details, async user =>
+            {
+                var reason = BuildAuditReason("BAN", details);
+                await user.BanAsync(0, reason, new RequestOptions { AuditLogReason = reason });
+            });
+        }
+
+        [Command("timeout")]
+        [Alias("mute")]
+        [Summary("Timeout a member and DM them the reason")]
+        [RequirePirateAdmin]
+        [RequireUserPermission(GuildPermission.ModerateMembers)]
+        [RequireBotPermission(GuildPermission.ModerateMembers)]
+        public async Task TimeoutAsync(ulong targetUserId, int minutes, [Remainder] string? details = null)
+        {
+            if (minutes < 1 || minutes > 40320)
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildError("Invalid Timeout", "Use a duration between `1` and `40320` minutes."));
+                return;
+            }
+
+            await ExecuteModerationAsync("TIMEOUT", targetUserId, details, async user =>
+            {
+                await user.SetTimeOutAsync(TimeSpan.FromMinutes(minutes), new RequestOptions { AuditLogReason = BuildAuditReason("TIMEOUT", details) });
+            }, minutes);
+        }
+
+        private async Task ExecuteModerationAsync(string actionTitle, ulong targetUserId, string? details, Func<IGuildUser, Task> moderationAction, int? timeoutMinutes = null)
+        {
+            IGuildUser? targetUser = Context.Guild.GetUser(targetUserId)
+                ?? await Context.Client.Rest.GetGuildUserAsync(Context.Guild.Id, targetUserId) as IGuildUser;
+
+            if (targetUser == null)
+            {
+                await ReplyAsync(embed: EmbedFactory.BuildError("User Not Found", "I could not find that user in this server."));
+                return;
+            }
+
+            var parsed = ParseModerationContext(details);
+            var resolvedReason = string.IsNullOrWhiteSpace(parsed.Reason) ? "No reason provided" : parsed.Reason;
+
+            string? linkedMessageText = null;
+            string? linkedMessageUrl = null;
+
+            if (!string.IsNullOrWhiteSpace(parsed.MessageLink))
+            {
+                var messageContext = await TryFetchMessageContextAsync(Context.Guild, parsed.MessageLink);
+                linkedMessageText = messageContext.content;
+                linkedMessageUrl = messageContext.url;
+            }
+
+            try
+            {
+                await SendModerationDmAsync(targetUser, actionTitle, resolvedReason, linkedMessageText, linkedMessageUrl, timeoutMinutes);
+            }
+            catch
+            {
+                // DM failures must never block the moderation action.
+            }
+
+            await moderationAction(targetUser);
+
+            var confirmation = new EmbedBuilder()
+                .WithTitle(actionTitle)
+                .WithColor(actionTitle == "BAN" ? new Color(0xED4245) : actionTitle == "TIMEOUT" ? new Color(0xFEE75C) : new Color(0xF28B82))
+                .WithDescription($"**Target:** {targetUser.Mention}\n**Reason:** {resolvedReason}")
+                .AddField("Executed By", $"{Context.User.Mention}\n`{Context.User.Id}`", true)
+                .AddField("When", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", true)
+                .WithFooter($"Action by {Context.User.Username}", Context.User.GetAvatarUrl() ?? Context.User.GetDefaultAvatarUrl())
+                .WithTimestamp(DateTimeOffset.UtcNow);
+
+            if (timeoutMinutes.HasValue)
+            {
+                confirmation.AddField("Timeout Duration", $"{timeoutMinutes.Value} minute{(timeoutMinutes.Value == 1 ? string.Empty : "s")}", true);
+            }
+
+            if (!string.IsNullOrWhiteSpace(linkedMessageText))
+            {
+                confirmation.AddField("Linked Message", BuildLinkedMessageField(linkedMessageText, linkedMessageUrl), false);
+            }
+
+            await ReplyAsync(embed: confirmation.Build());
+        }
+
+        private static string BuildAuditReason(string actionTitle, string? details)
+        {
+            var parsed = ParseModerationContext(details);
+            var reason = string.IsNullOrWhiteSpace(parsed.Reason) ? "No reason provided" : parsed.Reason;
+            return $"{actionTitle}: {reason}";
+        }
+
+        private static ModerationContext ParseModerationContext(string? details)
+        {
+            if (string.IsNullOrWhiteSpace(details))
+            {
+                return new ModerationContext(string.Empty, null, null);
+            }
+
+            var tokens = details.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+            string? messageLink = null;
+            ulong? ignoredAdminId = null;
+
+            if (tokens.Count > 0 && LooksLikeDiscordMessageLink(tokens[0]))
+            {
+                messageLink = tokens[0];
+                tokens.RemoveAt(0);
+            }
+
+            if (tokens.Count > 1 && ulong.TryParse(tokens[^1], out var adminId))
+            {
+                ignoredAdminId = adminId;
+                tokens.RemoveAt(tokens.Count - 1);
+            }
+
+            return new ModerationContext(string.Join(' ', tokens).Trim(), messageLink, ignoredAdminId);
+        }
+
+        private static bool LooksLikeDiscordMessageLink(string value)
+        {
+            return value.Contains("discord.com/channels/", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("discordapp.com/channels/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static async Task<(string? content, string? url)> TryFetchMessageContextAsync(SocketGuild guild, string messageLink)
+        {
+            if (!TryParseMessageLink(messageLink, out var guildId, out var channelId, out var messageId) || guildId != guild.Id)
+            {
+                return (null, messageLink);
+            }
+
+            var channel = guild.GetTextChannel(channelId);
+            if (channel == null)
+            {
+                return (null, messageLink);
+            }
+
+            var message = await channel.GetMessageAsync(messageId);
+            if (message == null)
+            {
+                return (null, messageLink);
+            }
+
+            var content = message.Content;
+            if (string.IsNullOrWhiteSpace(content) && message.Attachments.Count > 0)
+            {
+                content = $"Message contained {message.Attachments.Count} attachment(s).";
+            }
+
+            return (content, messageLink);
+        }
+
+        private async Task SendModerationDmAsync(IGuildUser targetUser, string actionTitle, string reason, string? linkedMessageText, string? linkedMessageUrl, int? timeoutMinutes)
+        {
+            var moderatorAvatar = Context.User.GetAvatarUrl() ?? Context.User.GetDefaultAvatarUrl();
+            var targetAvatar = targetUser.GetAvatarUrl() ?? targetUser.GetDefaultAvatarUrl();
+
+            var dmEmbed = new EmbedBuilder()
+                .WithTitle(actionTitle)
+                .WithColor(actionTitle == "BAN" ? new Color(0xED4245) : actionTitle == "TIMEOUT" ? new Color(0xFEE75C) : new Color(0xF28B82))
+                .WithAuthor(targetUser.Username, targetAvatar)
+                .WithDescription($"**What happened:** {GetActionText(actionTitle)}\n**Reason:** {reason}")
+                .AddField("Issued By", $"{Context.User.Username}\n`{Context.User.Id}`", true)
+                .AddField("Date & Time", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", true)
+                .WithFooter($"Action by {Context.User.Username}", moderatorAvatar)
+                .WithTimestamp(DateTimeOffset.UtcNow);
+
+            if (timeoutMinutes.HasValue)
+            {
+                dmEmbed.AddField("Duration", $"{timeoutMinutes.Value} minute{(timeoutMinutes.Value == 1 ? string.Empty : "s")}", true);
+            }
+
+            if (!string.IsNullOrWhiteSpace(linkedMessageText))
+            {
+                dmEmbed.AddField("Linked Message", BuildLinkedMessageField(linkedMessageText, linkedMessageUrl), false);
+            }
+
+            await targetUser.SendMessageAsync(embed: dmEmbed.Build());
+        }
+
+        private static string GetActionText(string actionTitle)
+        {
+            return actionTitle switch
+            {
+                "BAN" => "You have been banned from the server.",
+                "KICK" => "You have been kicked from the server.",
+                "TIMEOUT" => "You have been placed in timeout.",
+                _ => "A moderation action has been applied."
+            };
+        }
+
+        private static string BuildLinkedMessageField(string messageText, string? messageUrl)
+        {
+            var snippet = SafeSnippet(messageText, 800);
+            if (string.IsNullOrWhiteSpace(messageUrl))
+            {
+                return $"```text\n{snippet}\n```";
+            }
+
+            return $"[Open linked message]({messageUrl})\n```text\n{snippet}\n```";
+        }
+
+        private static string SafeSnippet(string input, int max)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return "—";
+            input = input.Replace("`", "'");
+            return input.Length <= max ? input : input.Substring(0, max) + "...";
+        }
+
+        private static bool TryParseMessageLink(string messageLink, out ulong guildId, out ulong channelId, out ulong messageId)
+        {
+            guildId = 0;
+            channelId = 0;
+            messageId = 0;
+
+            var normalized = messageLink.Trim().Trim('<', '>');
+            if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+            {
+                return false;
+            }
+
+            var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 3)
+            {
+                return false;
+            }
+
+            return ulong.TryParse(segments[^3], out guildId)
+                && ulong.TryParse(segments[^2], out channelId)
+                && ulong.TryParse(segments[^1], out messageId);
         }
 
         // -------------------------

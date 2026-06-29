@@ -35,11 +35,11 @@ namespace PiratBotCSharp.Modules
             
             // Embed für Setup-Start
             var embed = new EmbedBuilder()
-                .WithTitle("🏴‍☠️ Piraten-Ticket-System Setup")
+                .WithTitle("Piraten-Ticket-System Setup")
                 .WithDescription("Ahoy Kapitän! Lass uns dein Ticket-System konfigurieren.\n\nWähle den ersten Schritt:")
                 .WithColor(Color.Gold)
                 .WithThumbnailUrl("https://cdn.discordapp.com/emojis/1234567890.png")
-                .AddField("📋 Was wird konfiguriert:", 
+                .AddField("Was wird konfiguriert:", 
                     "• Log-Kanal für Ticket-Aktionen\n" +
                     "• Kategorie für neue Tickets\n" +
                     "• Support-Rollen\n" +
@@ -50,7 +50,7 @@ namespace PiratBotCSharp.Modules
 
             var selectMenu = new SelectMenuBuilder()
                 .WithCustomId("pirate_ticket_setup_step")
-                .WithPlaceholder("🏴‍☠️ Wähle einen Setup-Schritt...")
+                .WithPlaceholder("Wähle einen Setup-Schritt...")
                 .AddOption("Log-Kanal konfigurieren", "setup_log_channel", "📝 Kanal für Ticket-Logs festlegen")
                 .AddOption("Ticket-Kategorie konfigurieren", "setup_category", "📂 Kategorie für neue Tickets festlegen")
                 .AddOption("Support-Rollen konfigurieren", "setup_support_roles", "👥 Rollen mit Ticket-Zugriff festlegen")
@@ -88,13 +88,13 @@ namespace PiratBotCSharp.Modules
 
             if (!canClose)
             {
-                await ReplyAsync("🏴‍☠️ Du hast keine Berechtigung, dieses Ticket zu schließen, Matrose!");
+                await ReplyAsync("🏴‍☠️ Du hast keine Berechtigung, dieses Ticket zu schließen, du Ratte!");
                 return;
             }
 
             // Bestätigungsnachricht
             var embed = new EmbedBuilder()
-                .WithTitle("🏴‍☠️ Ticket schließen bestätigen")
+                .WithTitle("Ticket schließen bestätigen")
                 .WithDescription($"Arrr! Willst du dieses Ticket wirklich schließen?\n\n" +
                                $"**Ticket von:** <@{ticketMeta.UserId}>\n" +
                                $"**Kategorie:** {ticketMeta.Category}\n" +

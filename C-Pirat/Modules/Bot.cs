@@ -20,6 +20,7 @@ namespace PiratBotCSharp
         private readonly DiscordSocketClient _client;
         private readonly CommandService _commands;
         private readonly IServiceProvider _services;
+        private readonly HashSet<string> _knownCommandAliases = new(StringComparer.OrdinalIgnoreCase);
 
         public Bot()
         {
@@ -78,6 +79,7 @@ namespace PiratBotCSharp
             }
 
             await _commands.AddModulesAsync(Assembly.GetExecutingAssembly(), _services);
+            RebuildCommandAliasCache();
 
             await _client.LoginAsync(TokenType.Bot, token);
             await _client.StartAsync();
@@ -85,7 +87,7 @@ namespace PiratBotCSharp
 
         private async Task Client_Ready()
         {
-            Console.WriteLine($"🏴‍☠️ Mary the red ready. Logged in as {_client.CurrentUser}");
+            Console.WriteLine($"🏴‍☠️ Barbossa ready. Logged in as {_client.CurrentUser}");
             await _client.SetActivityAsync(new Game("Sailin' the seven seas"));
 
             var xpService = _services?.GetService<PiratbotCSharp.Modules.XPService>();
@@ -150,6 +152,15 @@ namespace PiratBotCSharp
                     Console.WriteLine($"🏴‍☠️ Pirate XPService HandleMessage error: {ex}");
                 }
 
+                await ReactionChannelService.HandleReactionAsync(message);
+
+                if (message.Attachments.Any(a => a.Width.HasValue) && message.Channel is SocketTextChannel imgChan)
+                {
+                    var imgUser = message.Author as SocketGuildUser;
+                    if (imgUser != null)
+                        _ = PiratBotCSharp.Modules.SecurityService.HandleImageSpamAsync(imgUser, imgChan.Guild);
+                }
+
                 int argPos = 0;
 
                 if (!(message.HasCharPrefix('?', ref argPos) || 
@@ -163,10 +174,16 @@ namespace PiratBotCSharp
                     argPos: argPos,
                     services: _services);
 
-
-                if (!result.IsSuccess && result.Error == CommandError.UnknownCommand)
+                if (!result.IsSuccess)
                 {
-                    await HandleUnknownCommand(context, message.Content.Substring(argPos));
+                    if (result.Error == CommandError.UnknownCommand)
+                    {
+                        await HandleUnknownCommand(context, message.Content.Substring(argPos));
+                    }
+                    else
+                    {
+                        Console.WriteLine($"🏴‍☠️ Command execution error: {result.Error} - {result.ErrorReason}");
+                    }
                 }
             }
             finally
@@ -177,8 +194,13 @@ namespace PiratBotCSharp
 
         private async Task HandleUnknownCommand(SocketCommandContext context, string command)
         {
-            var commandParts = command.Split(' ');
-            var firstWord = commandParts[0].ToLower();
+            var commandParts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (commandParts.Length == 0)
+            {
+                return;
+            }
+
+            var firstWord = commandParts[0].ToLowerInvariant();
 
             var corrections = new Dictionary<string, string>
             {
@@ -204,36 +226,37 @@ namespace PiratBotCSharp
                 { "sec", "setsecuritymod" },
                 { "moderation", "setsecuritymod" },
                 { "warn", "warn [userid] [reason]" },
-                { "ban", "Use Discord's built-in ban feature" },
-                { "kick", "Use Discord's built-in kick feature" },
-                { "mute", "Use Discord's timeout feature" },
-                { "timeout", "Use Discord's timeout feature" },
-                { "birthday", "pirate-birthdayset" },
-                { "bday", "pirate-birthdayset" },
+                { "ban", "ban [userid] [reason]" },
+                { "kick", "kick [userid] [reason]" },
+                { "mute", "timeout [userid] [minutes] [reason]" },
+                { "timeout", "timeout [userid] [minutes] [reason]" },
+                { "birthday", "pirate-birthdayset" },                { "bday", "pirate-birthdayset" },
                 { "birthdayset", "pirate-birthdayset" },
                 { "cleanup", "cleanup [number]" },
                 { "clear", "cleanup [number]" },
                 { "purge", "cleanup [number]" },
-                { "delete", "cleanup [number]" },
-                { "coinflip", "Coming Soon! Use ?help for available commands" },
-                { "coin", "Coming Soon! Use ?help for available commands" },
-                { "dice", "Coming Soon! Use ?help for available commands" },
-                { "slots", "Coming Soon! Use ?help for available commands" },
-                { "game", "Coming Soon! Use ?help for available commands" },
-                { "games", "Coming Soon! Use ?help for available commands" }
+                { "delete", "cleanup [number]" }
             };
 
-            if (corrections.ContainsKey(firstWord))
+            string? suggestion = null;
+            if (corrections.TryGetValue(firstWord, out var mappedSuggestion))
             {
-                var suggestion = corrections[firstWord];
+                suggestion = mappedSuggestion;
+            }
+            else if (TryGetBestCommandSuggestion(firstWord, out var fuzzySuggestion))
+            {
+                suggestion = fuzzySuggestion;
+            }
+
+            if (!string.IsNullOrWhiteSpace(suggestion))
+            {
                 var embed = new EmbedBuilder()
-                    .WithTitle("🏴‍☠️ Command Correction")
+                    .WithTitle("Command Correction")
                     .WithColor(0xFF6B35)
-                    .WithDescription($"**Ahoy matey! Did ye mean:**\n`?{suggestion}`")
-                    .AddField("💡 Tip", "Use `?help` to see all available commands, ye scurvy dog!")
-                    .AddField("🔍 What ye tried", $"`?{command}`", true)
-                    .AddField("✅ Suggested command", $"`?{suggestion}`", true)
-                    .WithFooter("Mary the Red • Command Assistant")
+                    .WithDescription($"Did you mean `?{suggestion}`?")
+                    .AddField("Tried", $"`?{command}`", true)
+                    .AddField("Suggestion", $"`?{suggestion}`", true)
+                    .WithFooter("Use ?help to see all commands.")
                     .WithCurrentTimestamp()
                     .Build();
 
@@ -242,18 +265,136 @@ namespace PiratBotCSharp
             else if (firstWord.Length > 2 && (firstWord.Contains("help") || firstWord.Contains("command")))
             {
                 var helpEmbed = new EmbedBuilder()
-                    .WithTitle("🏴‍☠️ Need Help, Matey?")
+                    .WithTitle("Need Help?")
                     .WithColor(0x8B4513)
-                    .WithDescription("**Arrr! Use these commands to navigate me ship:**")
-                    .AddField("📚 Main Help", "`?help` - Complete command list", false)
-                    .AddField("🎯 Interactive Help", "`?piratehelp` - Category-based help", false)
-                    .AddField("ℹ️ Bot Info", "`?info` - About Mary the Red", false)
-                    .WithFooter("The most feared pirate bot on Discord!")
+                    .WithDescription("Use these commands to navigate the bot:")
+                    .AddField("Main Help", "`?help` - Complete command list", false)
+                    .AddField("Interactive Help", "`?piratehelp` - Category-based help", false)
+                    .AddField("Bot Info", "`?info` - Bot information", false)
+                    .WithFooter("Use ?help to see all commands.")
                     .WithCurrentTimestamp()
                     .Build();
 
                 await context.Channel.SendMessageAsync(embed: helpEmbed);
             }
+            else
+            {
+                var unknownEmbed = new EmbedBuilder()
+                    .WithTitle("Unknown Command")
+                    .WithColor(0xB22222)
+                    .WithDescription($"I could not find a command for `?{firstWord}`.")
+                    .WithFooter("Use ?help to see all commands.")
+                    .WithCurrentTimestamp()
+                    .Build();
+
+                await context.Channel.SendMessageAsync(embed: unknownEmbed);
+            }
+        }
+
+        private void RebuildCommandAliasCache()
+        {
+            _knownCommandAliases.Clear();
+
+            foreach (var command in _commands.Commands)
+            {
+                foreach (var alias in command.Aliases)
+                {
+                    if (!string.IsNullOrWhiteSpace(alias))
+                    {
+                        _knownCommandAliases.Add(alias.ToLowerInvariant());
+                    }
+                }
+            }
+        }
+
+        private bool TryGetBestCommandSuggestion(string input, out string suggestion)
+        {
+            suggestion = string.Empty;
+            if (string.IsNullOrWhiteSpace(input) || _knownCommandAliases.Count == 0)
+            {
+                return false;
+            }
+
+            var normalizedInput = input.ToLowerInvariant();
+            var candidates = _knownCommandAliases.ToList();
+
+            var containsMatch = candidates
+                .FirstOrDefault(x => x.StartsWith(normalizedInput, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(containsMatch))
+            {
+                suggestion = containsMatch;
+                return true;
+            }
+
+            var bestCandidate = string.Empty;
+            var bestDistance = int.MaxValue;
+
+            foreach (var candidate in candidates)
+            {
+                var distance = LevenshteinDistance(normalizedInput, candidate);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestCandidate = candidate;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(bestCandidate))
+            {
+                return false;
+            }
+
+            var dynamicThreshold = normalizedInput.Length <= 4 ? 2 : 3;
+            if (bestDistance <= dynamicThreshold)
+            {
+                suggestion = bestCandidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        private int LevenshteinDistance(string source, string target)
+        {
+            if (source == target)
+            {
+                return 0;
+            }
+
+            if (source.Length == 0)
+            {
+                return target.Length;
+            }
+
+            if (target.Length == 0)
+            {
+                return source.Length;
+            }
+
+            var matrix = new int[source.Length + 1, target.Length + 1];
+
+            for (var i = 0; i <= source.Length; i++)
+            {
+                matrix[i, 0] = i;
+            }
+
+            for (var j = 0; j <= target.Length; j++)
+            {
+                matrix[0, j] = j;
+            }
+
+            for (var i = 1; i <= source.Length; i++)
+            {
+                for (var j = 1; j <= target.Length; j++)
+                {
+                    var cost = source[i - 1] == target[j - 1] ? 0 : 1;
+                    matrix[i, j] = Math.Min(
+                        Math.Min(matrix[i - 1, j] + 1, matrix[i, j - 1] + 1),
+                        matrix[i - 1, j - 1] + cost);
+                }
+            }
+
+            return matrix[source.Length, target.Length];
         }
 
         private async Task InteractionCreatedAsync(SocketInteraction interaction)
@@ -312,6 +453,10 @@ namespace PiratBotCSharp
                     {
                         await PiratBotCSharp.Modules.SecurityService.HandleSecurityAppealInteractionAsync(component);
                     }
+                    else if (customId == "pirate_verify_button")
+                    {
+                        await PirateVerifyService.HandleVerifyButtonAsync(component);
+                    }
                     else
                     {
                         
@@ -344,12 +489,11 @@ namespace PiratBotCSharp
                 {
                     var embed = new EmbedBuilder()
                         .WithTitle("🏴‍☠️ Ahoy, Captain!")
-                        .WithDescription("**Mary the Red has joined yer crew!**\\n\\n" +
+                        .WithDescription("**Barbossa has joined yer crew!**\\n\\n" +
                             "Thank ye fer invitin' me aboard yer fine vessel!\\n" +
                             "Use `?help` to see all the treasure I can help ye with!\\n\\n" +
                             "**Quick Start Commands:**\\n" +
                             "`?help` - Show all commands\\n" +
-                            "`?premium` - Unlock Premium treasures\\n" +
                             "`?ahoy` - Proper pirate greeting\\n\\n" +
                             "*Fair winds and following seas, matey!* ⚓")
                         .WithColor(0x8B0000)
@@ -636,7 +780,8 @@ namespace PiratBotCSharp
                 .AddOption("💡 Vorschlag", "vorschlag", "Verbesserungsvorschläge")
                 .AddOption("⚠️ Beschwerde", "beschwerde", "Beschwerden oder Probleme")
                 .AddOption("🤝 Partnership", "partnership", "Partnership-Anfragen")
-                .AddOption("❓ Sonstiges", "other", "Andere Anliegen");
+                .AddOption("❓ Sonstiges", "other", "Andere Anliegen")
+                .AddOption("📖 Alle Commands anzeigen", "user_help", "Zeigt alle verfügbaren Commands nur für dich");
 
             var embed = new EmbedBuilder()
                 .WithTitle("🏴‍☠️ Ticket-Kategorie wählen")
@@ -651,6 +796,40 @@ namespace PiratBotCSharp
         private async Task HandleTicketCategoryAsync(SocketMessageComponent component)
         {
             var category = component.Data.Values.FirstOrDefault();
+
+            if (category == "user_help")
+            {
+                var helpEmbed = new EmbedBuilder()
+                    .WithTitle("**Barbossa's Commands**")
+                    .WithColor(0xFFFFFF)
+                    .WithDescription("*Ahoy matey! Here are all the commands ye can use aboard this ship!*")
+                    .AddField("**Sea of Thieves**",
+                        "`?sot-set-profile` - Link your Xbox Gamertag\n" +
+                        "`?sot-show-ranks` - Show your SoT profile\n" +
+                        "`?sot-unlink` - Remove linked Xbox profile", false)
+                    .AddField("**Voice Features**",
+                        "`?voicename [name]` - Rename your pirate cabin\n" +
+                        "`?voicelimit [0-99]` - Set cabin crew limit (0=unlimited)\n" +
+                        "`?voicelock` / `?voiceunlock` - Make cabin private/public\n" +
+                        "`?voicehelp` - Voice system help", false)
+                    .AddField("**XP System**",
+                        "`?xp [user]` - Check pirate XP status", false)
+                    .AddField("**Birthday System**",
+                        "`?pirate-birthdayset [DD.MM.YYYY]` - Set your birthday\n" +
+                        "`?pirate-mybirthdayremove` - Remove your own birthday\n" +
+                        "`?pirate-mybirthdayinfo` - Check your birthday info\n" +
+                        "`?pirate-birthdaylist` - List all crew birthdays\n" +
+                        "`?pirate-todaysbirthdays` - See today's birthdays", false)
+                    .AddField("**Core Commands**",
+                        "`?user-help` - Show this help\n" +
+                        "`?info` - Bot information & stats\n" +
+                        "`?gm` / `?gn` / `?hi` - Friendly greetings", false)
+                    .WithFooter("BARBOSSA - The Most Feared Pirate Bot! \u2022 today at " + DateTime.Now.ToString("HH:mm"))
+                    .Build();
+
+                await component.RespondAsync(embed: helpEmbed, ephemeral: true);
+                return;
+            }
             var guildId = ((SocketGuildChannel)component.Channel).Guild.Id;
             var config = LoadTicketConfig(guildId);
             var guild = ((SocketGuildChannel)component.Channel).Guild;

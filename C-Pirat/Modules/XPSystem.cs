@@ -91,13 +91,18 @@ namespace PiratbotCSharp.Modules
         }
 
         [Command("xp")]
-        public async Task CheckXP(SocketUser? user = null)
+        public async Task CheckXP(IGuildUser? user = null)
         {
-            user = user ?? Context.User;
+            user ??= Context.User as IGuildUser;
+            if (user == null)
+            {
+                await ReplyAsync("🏴‍☠️ **Error:** Unable to identify user, Arr!");
+                return;
+            }
+            
             var userData = await _xpService.GetUserData(Context.Guild.Id, user.Id);
             
-            var guildUser = user as SocketGuildUser ?? Context.Guild.GetUser(user.Id);
-            var displayName = guildUser?.DisplayName ?? user.Username;
+            var displayName = user.DisplayName ?? user.Username;
             
             var embed = new EmbedBuilder()
                 .WithTitle("📊 Your XP-Stats")
@@ -138,6 +143,51 @@ namespace PiratbotCSharp.Modules
                 .WithColor(hasManageRoles ? Color.Green : Color.Red)
                 .WithFooter("Wenn 'Manage Roles' = NO ist, kann der Bot keine Rollen zuweisen!");
                 
+            await ReplyAsync(embed: embed.Build());
+        }
+
+        [Command("xp-give")]
+        [Alias("givexp", "addxp")]
+        [Summary("Give XP to a user (Admin only)")]
+        [RequirePirateAdmin]
+        public async Task GiveXPAsync(IGuildUser? user, int amount)
+        {
+            if (user == null)
+            {
+                await ReplyAsync("💀 **User not found!** Mention a valid user or provide a valid user ID.");
+                return;
+            }
+
+            if (amount <= 0)
+            {
+                await ReplyAsync("💀 **Invalid amount!** XP amount must be greater than 0.");
+                return;
+            }
+
+            if (amount > 500000)
+            {
+                await ReplyAsync("💀 **Too much XP at once!** Maximum per command is 500000 XP.");
+                return;
+            }
+
+            var result = await _xpService.AddManualXP(Context.Guild, user, amount);
+
+            if (!result.success)
+            {
+                await ReplyAsync($"💀 **Failed to add XP:** {result.reason}");
+                return;
+            }
+
+            var embed = new EmbedBuilder()
+                .WithTitle("🏴‍☠️ XP Granted")
+                .WithColor(0x228B22)
+                .AddField("Crew Member", user.Mention, true)
+                .AddField("Granted XP", amount, true)
+                .AddField("New Total XP", result.totalXP, true)
+                .AddField("New Level", result.level, true)
+                .AddField("Given By", Context.User.Mention, true)
+                .WithCurrentTimestamp();
+
             await ReplyAsync(embed: embed.Build());
         }
 
@@ -511,6 +561,32 @@ namespace PiratbotCSharp.Modules
             }
 
             SaveXPData();
+        }
+
+        public async Task<(bool success, string reason, int totalXP, int level)> AddManualXP(SocketGuild guild, IGuildUser user, int amount)
+        {
+            if (amount <= 0)
+            {
+                return (false, "Amount must be greater than 0.", 0, 0);
+            }
+
+            var guildUser = guild.GetUser(user.Id);
+            if (guildUser == null)
+            {
+                return (false, "User is not in this server.", 0, 0);
+            }
+
+            var userData = await GetUserData(guild.Id, guildUser.Id);
+            userData.MessageXP = Math.Max(0, userData.MessageXP + amount);
+            userData.UpdateTotalXP();
+
+            var newLevel = GetLevelFromXP(userData.TotalXP);
+            userData.Level = newLevel;
+
+            await UpdateLevelRoles(guildUser, newLevel);
+            SaveXPData();
+
+            return (true, string.Empty, userData.TotalXP, userData.Level);
         }
 
         private async Task UpdateLevelRoles(SocketGuildUser user, int level)

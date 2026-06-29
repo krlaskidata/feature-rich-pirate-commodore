@@ -496,7 +496,7 @@ namespace PiratBotCSharp.Modules
                         "• Cabin gets deleted when empty\n" +
                         "• Use `?voicename <name>` to rename your cabin\n" +
                         "• Use `?voicelimit <number>` to set user limit", false)
-                    .WithFooter("🏴‍☠️ Mary the Red Auto Voice System")
+                    .WithFooter("🏴‍☠️ Barbossa Auto Voice System")
                     .WithCurrentTimestamp()
                     .Build();
 
@@ -552,7 +552,7 @@ namespace PiratBotCSharp.Modules
                     .AddField("🏴‍☠️ Allowed Role", allowedRole.Mention, true)
                     .WithDescription("**Pirate voice system configured successfully!** ⚔️\n\n" +
                         "Use `?create [category-id]` to create Join-to-Create channels")
-                    .WithFooter("🏴‍☠️ Mary the Red Voice System")
+                    .WithFooter("🏴‍☠️ Barbossa Voice System")
                     .WithCurrentTimestamp()
                     .Build();
                 await ReplyAsync(embed: embed);
@@ -593,7 +593,7 @@ namespace PiratBotCSharp.Modules
                     .WithDescription("**Ahoy! Another Join-to-Create cabin is ready for yer crew!** ⚔️\n\n" +
                         "Pirates can now join this channel to create their own private cabins!\n" +
                         "This works parallel to all other Join-to-Create channels!")
-                    .WithFooter("🏴‍☠️ Mary the Red - Supporting unlimited Join-to-Create channels!")
+                    .WithFooter("🏴‍☠️ Barbossa - Supporting unlimited Join-to-Create channels!")
                     .WithCurrentTimestamp()
                     .Build();
                 await ReplyAsync(embed: embed);
@@ -893,7 +893,7 @@ namespace PiratBotCSharp.Modules
                     "• You get full control over your cabin\n" +
                     "• Cabin is deleted when empty\n" +
                     "• **Multiple Join-to-Create channels supported!**", false)
-                .WithFooter("🏴‍☠️ Mary the Red - The most advanced pirate voice system!")
+                .WithFooter("🏴‍☠️ Barbossa - The most advanced pirate voice system!")
                 .WithCurrentTimestamp();
 
             await ReplyAsync(embed: embed.Build());

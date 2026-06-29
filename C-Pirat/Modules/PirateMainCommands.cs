@@ -25,51 +25,38 @@ namespace PiratBotCSharp.Modules
         public async Task HelpAsync()
         {
             var embed = new EmbedBuilder()
-                .WithTitle("**Mary the Red - Pirate Bot**")
-                .WithColor(0x8B4513)
+                .WithTitle("**Barbossa's Commands**")
+                .WithColor(0xFFFFFF)
                 .WithDescription("*Ahoy matey! Welcome aboard the most fearsome pirate ship on Discord!*")
+
                 
-                .AddField("**ECONOMY SYSTEM**",
-                    "`?pirate-daily` - Claim your daily gold treasure\n" +
-                    "`?pirate-work` - Work for gold coins\n" +
-                    "`?pirate-balance` - Check your treasure chest\n" +
-                    "`?pirate-profile` - View your pirate profile\n" +
-                    "`?pirate-rank` - Check your rank among pirates\n" +
-                    "`?pirate-leaderboard` - See the richest pirates", false)
-
-                .AddField("**BIRTHDAY SYSTEM**",
-                    "`?pirate-birthdayset [DD.MM.YYYY]` - Set your birthday\n" +
-                    "`?pirate-birthdayremove` - Remove someone's birthday (Admin)\n" +
-                    "`?pirate-mybirthdayremove` - Remove your own birthday\n" +
-                    "`?pirate-mybirthdayinfo` - Check your birthday info\n" +
-                    "`?pirate-birthdaylist` - List all crew birthdays\n" +
-                    "`?pirate-todaysbirthdays` - See today's birthdays\n" +
-                    "`?pirate-birthdaychannel <#channel>` - Set birthday channel", false)
-
-                .AddField("**BUMP REMINDER SYSTEM**",
-                    "`?pirate-bumpreminder <#channel>` - Setup bump reminders\n" +
-                    "`?pirate-bumpstatus` - Check reminder status\n" +
-                    "`?pirate-bump` - Manual bump reminder", false)
-
                 .AddField("**Security & Moderation**",
                     "`?setsecuritymod` - Setup security system for your ship\n" +
                     "`?disable` - Disable security system\n" +
                     "`?status` - Check security system status\n" +
+                    "`?channel18 <role_id>` - Setup 18+ voice access\n" +
                     "`?security-filters` - List all security categories and consequences\n" +
-                    "`?warn [userid] [reason]` - Warn a crew member\n" +
-                    "`?unban [userid]` - Unban a pirate\n" +
-                    "`?timeoutdel @user` - Remove timeout from crew member\n" +
+                    "`?security-toggle-links <true/false>` - Toggle link filtering\n" +
+                    "`?kick <user_id> <reason>` - Kick a member and DM them\n" +
+                    "`?ban <user_id> <reason>` - Ban a member and DM them\n" +
+                    "`?timeout <user_id> <minutes> <reason>` - Timeout a member and DM them\n" +
                     "`?close-sticket` - Close an open security appeal ticket\n" +
-                    "`?cleanup [number]` - Clean the deck (delete messages)\n" +
                     "`?cleanup-now` - Deep clean the entire deck\n" +
-                    "`?warnhelp` / `?unbanhelp` - Command usage help", false)
+                    "`?cleanup-intervall <channel_id> <10h/5d>` - Auto cleanup setup\n" +
+                    "`?delcleanup-intervall <channel_id>` - Disable auto cleanup\n" +
+                    "`?give-love` - Dangerous full channel wipe (owner only)", false)
+
+                .AddField("**Sea of Thieves**",
+                    "`?sot-set-profile` - Link your Xbox profile\n" +
+                    "`?sot-show-ranks` - Show your SoT profile and ranks\n" +
+                    "`?sot-unlink` - Remove linked Xbox profile", false)
 
                 .AddField("**Ticket System**",
                     "`?pirate-ticket-setup` - Setup ticket system for your crew\n" +
-                    "`?pirate-set-support [ROLE_ID]` - Set support roles\n" +
                     "`?pirate-ticket-close` - Close the current ticket\n" +
                     "`?pirate-ticket-status` - Show ticket system status\n" +
-                    "`?pirate-del-ticket-system` - Remove ticket system", false)
+                    "`?setup` - Legacy simple ticket setup\n" +
+                    "`?close` - Legacy simple ticket close", false)
 
                 .AddField("**Voice Features**",
                     "`?pirate-voice-setup` - Auto setup pirate voice system\n" +
@@ -86,27 +73,95 @@ namespace PiratBotCSharp.Modules
                     "`?run-xp-setup` - Setup pirate XP system with roles\n" +
                     "`?remove-xp-setup` - Remove XP system\n" +
                     "`?xp [user]` - Check pirate XP status\n" +
+                    "`?xp-give @user <amount>` - Give XP to user (Admin)\n" +
                     "`?xp-debug` - Debug XP system (Admin)\n" +
-                    "`?create-rolemanagement-embed <#channel>` - Create role info", false)
+                    "`?create-rolemanagement-embed <#channel>` - Create role info", false)  
 
-                .AddField("**Utilities**",
-                    "`?ping` - Check bot latency\n" +
-                    "`?sendit MESSAGE_ID to CHANNEL_ID` - Send message to another channel\n" +
+                .AddField("**BIRTHDAY SYSTEM**",
+                    "`?pirate-birthdayset [DD.MM.YYYY]` - Set your birthday\n" +
+                    "`?pirate-birthdayremove` - Remove someone's birthday (Admin)\n" +
+                    "`?pirate-mybirthdayremove` - Remove your own birthday\n" +
+                    "`?pirate-mybirthdayinfo` - Check your birthday info\n" +
+                    "`?pirate-birthdaylist` - List all crew birthdays\n" +
+                    "`?pirate-todaysbirthdays` - See today's birthdays\n" +
+                    "`?pirate-birthdaychannel <#channel>` - Set birthday channel", false) 
+
+                .AddField("**BUMP REMINDER SYSTEM**",
+                    "`?pirate-bumpreminder <#channel>` - Setup bump reminders\n" +
+                    "`?pirate-bumpstatus` - Check reminder status\n" +
+                    "`?pirate-bump` - Manual bump reminder", false)
+
+                .AddField("**Verify System**",
+                    "`?verify-setup @role [#log] [captcha true/false]` - Setup verification\n" +
+                    "`?verify @user` - Manually verify a user\n" +
+                    "`?unverify @user` - Remove verification from a user\n" +
+                    "`?verify-status` - Check verify system status\n" +
+                    "`?verify-remove` - Remove verify system", false)
+
+                .AddField("**Update Commands**",
+                    "`?ticket-update` - Refresh ticket embed to latest version\n" +
+                    "`?voice-update` - Refresh voice channel permissions\n" +
+                    "`?security-update` - Refresh security channel permissions\n" +
+                    "`?verify-update` - Refresh verify embed to latest version", false)
+
+                .AddField("**Reaction Channels**",
+                    "`?reaction-channel <channel_id> <emoji>` - Auto-react to every message\n" +
+                    "`?reaction-channel-remove <channel_id>` - Remove auto-reaction\n" +
+                    "`?reaction-channel-list` - List all reaction channels", false)
+
+                .AddField("**Core Commands**",
+                    "`?help` - Show all available commands\n" +
+                    "`?user-help` - Show user-only commands\n" +
                     "`?info` - Bot information & stats\n" +
-                    "`?gm` / `?gn` / `?hi` - Friendly pirate greetings\n" +
-                    "`?piratehelp` - Interactive help menu", false)
+                    "`?gm` / `?gn` / `?hi` - Friendly greetings\n" +
+                    "`?sendit MESSAGE_ID to CHANNEL_ID` - Forward a message", false)
 
-                .AddField("**PIRATE CASINO & GAMES (Coming Soon)**",
-                    "**In Development:**\n" +
-                    "`?coinflip`, `?dice`, `?slots`, `?treasure`, `?raid`\n" +
-                    "Advanced gambling features coming soon!", false)
+                .WithImageUrl("https://media.discordapp.net/attachments/1410334562361409600/1517468865456771092/standard.gif?ex=6a3b01c2&is=6a39b042&hm=0cef07909d76f1655a0ddbcb31c352323cc59b0ccd32c7a4adcb6537e18dccae&=")
 
-                .WithFooter("Mary the Red - The Most Feared Pirate Bot! • heute um " + DateTime.Now.ToString("HH:ss") + " Uhr")
-                .WithCurrentTimestamp();
+                .WithFooter("BARBOSSA - The Most Feared Pirate Bot! • today at " + DateTime.Now.ToString("HH:mm"));
 
             await ReplyAsync(embed: embed.Build());
         }
+        [Command("user-help")]
+        [Summary("Shows all commands available to regular crew members")]
+        public async Task UserHelpAsync()
+        {
+            var embed = new EmbedBuilder()
+                .WithTitle("**Barbossa's Commands**")
+                .WithColor(0xFFFFFF)
+                .WithDescription("*Ahoy matey! Here are all the commands ye can use aboard this ship!*")
 
+                .AddField("**Sea of Thieves**",
+                    "`?sot-set-profile` - Link your Xbox Gamertag\n" +
+                    "`?sot-show-ranks` - Show your SoT profile\n" +
+                    "`?sot-unlink` - Remove linked Xbox profile", false)
+
+                .AddField("**Voice Features**",
+                    "`?voicename [name]` - Rename your pirate cabin\n" +
+                    "`?voicelimit [0-99]` - Set cabin crew limit (0=unlimited)\n" +
+                    "`?voicelock` / `?voiceunlock` - Make cabin private/public\n" +
+                    "`?voicehelp` - Voice system help", false)
+
+                .AddField("**XP System**",
+                    "`?xp [user]` - Check pirate XP status", false)
+
+                .AddField("**Birthday System**",
+                    "`?pirate-birthdayset [DD.MM.YYYY]` - Set your birthday\n" +
+                    "`?pirate-mybirthdayremove` - Remove your own birthday\n" +
+                    "`?pirate-mybirthdayinfo` - Check your birthday info\n" +
+                    "`?pirate-birthdaylist` - List all crew birthdays\n" +
+                    "`?pirate-todaysbirthdays` - See today's birthdays", false)
+
+                .AddField("**Core Commands**",
+                    "`?user-help` - Show this help\n" +
+                    "`?info` - Bot information & stats\n" +
+                    "`?gm` / `?gn` / `?hi` - Friendly greetings", false)
+
+                .WithImageUrl("https://media.discordapp.net/attachments/1410334562361409600/1517468865456771092/standard.gif?ex=6a3b01c2&is=6a39b042&hm=0cef07909d76f1655a0ddbcb31c352323cc59b0ccd32c7a4adcb6537e18dccae&=")
+                .WithFooter("BARBOSSA - The Most Feared Pirate Bot! \u2022 today at " + DateTime.Now.ToString("HH:mm"));
+
+            await ReplyAsync(embed: embed.Build());
+        }
         // Command correction system - catches common command mistakes
         [Command("help-correct")]
         public async Task CorrectCommandAsync([Remainder] string? wrongCommand = null)
@@ -131,9 +186,9 @@ namespace PiratBotCSharp.Modules
                 { "level", "xp" },
                 { "security", "setsecuritymod" },
                 { "warn", "warn [userid] [reason]" },
-                { "ban", "Use Discord's built-in ban feature" },
-                { "kick", "Use Discord's built-in kick feature" },
-                { "mute", "Use Discord's timeout feature" },
+                { "ban", "ban [userid] [reason]" },
+                { "kick", "kick [userid] [reason]" },
+                { "mute", "timeout [userid] [minutes] [reason]" },
                 { "birthday", "pirate-birthdayset" }
             };
 
@@ -145,7 +200,7 @@ namespace PiratBotCSharp.Modules
                 .WithColor(0xFF6B35)
                 .WithDescription($"**Ahoy! Did ye mean:**\n`?{suggestion.Value ?? "help"}`")
                 .AddField("💡 Tip", "Use `?help` to see all available commands, matey!")
-                .WithFooter("Mary the Red • Command Assistant")
+                .WithFooter("Barbossa • Command Assistant")
                 .WithCurrentTimestamp()
                 .Build();
 
@@ -282,7 +337,7 @@ namespace PiratBotCSharp.Modules
             if (string.IsNullOrWhiteSpace(args))
             {
                 var usageEmbed = new EmbedBuilder()
-                    .WithColor(0xFFD700) // Gold/Yellow
+                    .WithColor(0xFFD700)
                     .WithTitle("📝 ?sendit Command Usage")
                     .WithDescription("Forward a message from this channel to another channel.")
                     .AddField("Usage", "`?sendit MESSAGE_ID to CHANNEL_ID`", false)
@@ -294,7 +349,6 @@ namespace PiratBotCSharp.Modules
                 return;
             }
 
-            // Parse: MESSAGE_ID to CHANNEL_ID
             var parts = args.Split(new[] { " to " }, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length != 2)
             {
@@ -319,7 +373,6 @@ namespace PiratBotCSharp.Modules
 
             try
             {
-                // Fetch the message from current channel
                 var originalMessage = await Context.Channel.GetMessageAsync(messageId);
                 if (originalMessage == null)
                 {
@@ -332,7 +385,6 @@ namespace PiratBotCSharp.Modules
                     return;
                 }
 
-                // Get target channel
                 var targetChannel = Context.Guild.GetTextChannel(channelId);
                 if (targetChannel == null)
                 {
@@ -345,7 +397,6 @@ namespace PiratBotCSharp.Modules
                     return;
                 }
 
-                // Check bot permissions in target channel
                 var botPerms = targetChannel.GetPermissionOverwrite(Context.Guild.CurrentUser);
                 if (botPerms?.SendMessages == PermValue.Deny)
                 {
@@ -353,16 +404,13 @@ namespace PiratBotCSharp.Modules
                     return;
                 }
 
-                // Forward only the message content - no embeds, no author info
                 var content = originalMessage.Content;
                 
-                // If message has content, send it
                 if (!string.IsNullOrWhiteSpace(content))
                 {
                     await targetChannel.SendMessageAsync(content);
                 }
                 
-                // Forward attachments if any
                 if (originalMessage.Attachments.Count > 0)
                 {
                     foreach (var attachment in originalMessage.Attachments)
@@ -371,7 +419,13 @@ namespace PiratBotCSharp.Modules
                     }
                 }
 
-                await ReplyAsync($"✅ Message forwarded to {targetChannel.Mention}!");
+                try
+                {
+                    await Context.Message.DeleteAsync();
+                }
+                catch
+                {
+                }
             }
             catch (Exception ex)
             {
